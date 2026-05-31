@@ -2,10 +2,6 @@
 
 > Analyze any GitHub repository for security vulnerabilities, outdated dependencies, architectural issues, and code health. AI-powered modernization roadmaps via Claude API. Track health score trends over time.
 
-[![CI](https://github.com/yourusername/reposcan/actions/workflows/ci.yml/badge.svg)](https://github.com/yourusername/reposcan/actions/workflows/ci.yml)
-
-**[Live Demo](https://reposcan.vercel.app)** · **[Demo Video](https://loom.com/your-demo-link)**
-
 ---
 
 ## What it does
@@ -20,21 +16,6 @@ Paste a GitHub URL → get a full engineering analysis in under 60 seconds:
 - **Health Score** — weighted 0–100 score with named deductions per category
 - **AI Recommendations** — Claude-powered prioritized action items and modernization roadmap
 - **History & Trends** — health score tracked over time, scan comparison (before vs after fixes)
-
----
-
-## Why this is different from SonarQube / Dependabot / CodeClimate
-
-| Feature | RepoScan | SonarQube | Dependabot | CodeClimate |
-|---|---|---|---|---|
-| CVE detection | ✅ | ❌ | ✅ | ❌ |
-| Git hotspot analysis | ✅ | ❌ | ❌ | ❌ |
-| Bus factor analysis | ✅ | ❌ | ❌ | ❌ |
-| AI modernization roadmap | ✅ | ❌ | ❌ | ❌ |
-| Health score trend over time | ✅ | ❌ | ❌ | ✅ |
-| Scan comparison (before/after) | ✅ | ❌ | ❌ | ❌ |
-| Free to use | ✅ | Partial | ✅ | Partial |
-| No installation required | ✅ | ❌ | ✅ | ❌ |
 
 ---
 
