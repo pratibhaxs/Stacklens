@@ -1,0 +1,25 @@
+# docker-compose.dev.yml
+# Phase 1: Only Redis for local development.
+# Run with: docker-compose -f docker-compose.dev.yml up -d
+#
+# Why only Redis now: backend and frontend still run with plain `node`
+# during development — faster feedback, easier debugging.
+# Full docker-compose.yml (containerizing the whole app) comes in Phase 5.
+
+version: '3.8'
+
+services:
+  redis:
+    image: redis:alpine
+    container_name: reposcan-redis
+    ports:
+      - "6379:6379"
+    # restart unless-stopped: Redis auto-restarts if Docker restarts
+    # (e.g. after a system reboot), so you don't have to manually start it
+    restart: unless-stopped
+    # healthcheck: lets other services (in Phase 5) wait for Redis to be ready
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3

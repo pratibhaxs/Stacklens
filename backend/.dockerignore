@@ -1,0 +1,25 @@
+# backend/.dockerignore
+# Prevents these from being sent to Docker build context.
+# Without this, node_modules (100k+ files) would be copied into
+# the image even though we run npm ci inside the container.
+# This makes builds significantly faster.
+
+node_modules
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+dist
+build
+coverage
+*.log
+.nyc_output
+tmp/
+.DS_Store
+Thumbs.db
+
+# Prisma migration files are needed — do NOT exclude prisma/
+# but exclude the local dev DB if you have one
+*.db
+*.sqlite

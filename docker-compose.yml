@@ -1,0 +1,130 @@
+# docker-compose.yml — Full stack, single command startup
+# Run with: docker-compose up --build
+# Everything starts automatically — no separate commands needed
+
+version: '3.8'
+
+services:
+
+  # ── PostgreSQL database ─────────────────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    container_name: reposcan-db
+    environment:
+      POSTGRES_DB:       reposcan
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: localdev_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: reposcan-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Migration runner ────────────────────────────────────────────────────────
+  # Runs prisma migrate deploy once, then exits
+  # Depends on db being healthy before running
+  # Backend and worker wait for this to complete before starting
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: reposcan-migrate
+    command: ["npx", "prisma", "migrate", "deploy"]
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: "postgresql://postgres:localdev_password@db:5432/reposcan"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"   # run once and exit — do not restart
+
+  # ── API server ──────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: reposcan-backend
+    ports:
+      - "3001:3001"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: "postgresql://postgres:localdev_password@db:5432/reposcan"
+      NODE_ENV: production
+      PORT: 3001
+      FRONTEND_URL: "http://localhost:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ── Background worker ───────────────────────────────────────────────────────
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: reposcan-worker
+    command: ["node", "src/worker/index.js"]
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: "postgresql://postgres:localdev_password@db:5432/reposcan"
+      NODE_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Frontend ────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: reposcan-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXTAUTH_SECRET:      "${NEXTAUTH_SECRET}"
+      NEXTAUTH_URL:         "http://localhost:3000"
+      GITHUB_CLIENT_ID:     "${GITHUB_CLIENT_ID}"
+      GITHUB_CLIENT_SECRET: "${GITHUB_CLIENT_SECRET}"
+      NEXT_PUBLIC_API_URL:  "http://localhost:3001"
+      BACKEND_URL:          "http://backend:3001"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

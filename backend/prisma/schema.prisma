@@ -1,0 +1,68 @@
+// prisma/schema.prisma — Phase 5 final with Alpine binary target
+
+generator client {
+  provider      = "prisma-client-js"
+  // Explicitly tell Prisma to generate the linux-musl binary
+  // needed for Alpine Linux inside Docker
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  githubId  String   @unique
+  username  String
+  email     String?
+  avatarUrl String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  scans     Scan[]
+  @@index([githubId])
+}
+
+model Scan {
+  id                String    @id @default(cuid())
+  repoUrl           String
+  repoOwner         String?
+  repoName          String?
+  repoSize          Int?
+  status            String    @default("pending")
+  startedAt         DateTime?
+  completedAt       DateTime?
+  errorMsg          String?
+  result            Json?
+  aiRecommendations Json?
+  aiGeneratedAt     DateTime?
+  userId            String?
+  user              User?     @relation(fields: [userId], references: [id])
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([repoUrl, status])
+  @@index([status, createdAt])
+  @@index([userId])
+}
+
+model ScanHistory {
+  id             String   @id @default(cuid())
+  repoUrl        String
+  repoOwner      String?
+  repoName       String?
+  scanId         String
+  score          Int
+  grade          String
+  criticalCVEs   Int      @default(0)
+  highCVEs       Int      @default(0)
+  totalVulns     Int      @default(0)
+  outdatedDeps   Int      @default(0)
+  busFactorScore Int?
+  commitTrend    String?
+  scannedAt      DateTime @default(now())
+
+  @@index([repoUrl, scannedAt])
+  @@index([repoUrl])
+}

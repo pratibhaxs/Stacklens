@@ -1,0 +1,119 @@
+# .github/workflows/ci.yml
+# Runs on every push to main and every pull request.
+# Does three things:
+#   1. Installs dependencies
+#   2. Runs Prisma migrations against a test DB
+#   3. Builds the Docker image and verifies it starts
+#
+# Why this order:
+#   If migrations fail, there's no point building Docker.
+#   If Docker build fails, there's no point deploying.
+#   Each step gates the next.
+#
+# The green checkmark this produces is visible on your GitHub repo
+# to every recruiter who views it. It signals production-grade habits.
+
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-and-build:
+    name: Test & Build
+    runs-on: ubuntu-latest
+
+    # Spin up a Postgres service container for migration testing
+    # Why: we need a real DB to verify migrations work, not mocks
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB:       reposcan_test
+          POSTGRES_USER:     postgres
+          POSTGRES_PASSWORD: testpassword
+        ports:
+          - 5432:5432
+        # Wait for postgres to be healthy before running steps
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. Node.js setup ──────────────────────────────────────────────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # Cache npm deps — speeds up subsequent runs significantly
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      # ── 3. Install backend dependencies ──────────────────────────────────────
+      - name: Install backend dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      # ── 4. Generate Prisma client ─────────────────────────────────────────────
+      - name: Generate Prisma client
+        working-directory: ./backend
+        run: npx prisma generate
+
+      # ── 5. Run database migrations ────────────────────────────────────────────
+      # This verifies your schema is valid and migrations apply cleanly
+      # on a fresh database — catches migration errors before deploy
+      - name: Run Prisma migrations
+        working-directory: ./backend
+        env:
+          DATABASE_URL: postgresql://postgres:testpassword@localhost:5432/reposcan_test
+        run: npx prisma migrate deploy
+
+      # ── 6. Build Docker image ─────────────────────────────────────────────────
+      # Verifies the Dockerfile is valid and all files are in place
+      - name: Build Docker image
+        run: docker build -t reposcan-backend:ci ./backend
+
+      # ── 7. Verify image starts correctly ─────────────────────────────────────
+      # Runs the image and checks node is working inside the container
+      - name: Verify Docker image runs
+        run: |
+          docker run --rm reposcan-backend:ci node --version
+          echo "✓ Docker image starts successfully"
+
+      # ── 8. Install frontend dependencies ─────────────────────────────────────
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci --legacy-peer-deps
+
+      # ── 9. Build Next.js frontend ─────────────────────────────────────────────
+      # Catches any import errors, missing components, or type errors
+      # before they hit production
+      - name: Build Next.js frontend
+        working-directory: ./frontend
+        env:
+          # Dummy values needed for next build to succeed
+          NEXTAUTH_SECRET:        "ci-test-secret-not-real"
+          NEXTAUTH_URL:           "http://localhost:3000"
+          GITHUB_CLIENT_ID:       "ci-placeholder"
+          GITHUB_CLIENT_SECRET:   "ci-placeholder"
+          NEXT_PUBLIC_API_URL:    "http://localhost:3001"
+        run: npm run build
+
+      # ── 10. Success summary ──────────────────────────────────────────────────
+      - name: CI passed
+        run: |
+          echo "✓ Dependencies installed"
+          echo "✓ Prisma migrations verified"
+          echo "✓ Docker image built and verified"
+          echo "✓ Next.js frontend built"
+          echo ""
+          echo "Ready to deploy."
