@@ -43,4 +43,6 @@ USER nodejs
 EXPOSE 3001
 
 ENTRYPOINT ["dumb-init", "--"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://localhost:3001/health || exit 1
 CMD ["node", "src/server.js"]

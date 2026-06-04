@@ -1,15 +1,16 @@
 'use client'
-// components/dashboard/ResultCard.js — Phase 4
-// Adds RepoHistoryCard below AI recommendations.
+// components/dashboard/ResultCard.js — with Architecture Intelligence
 
-import { HealthScoreCard }       from './HealthScoreCard.js'
-import { VulnerabilityCard }     from './VulnerabilityCard.js'
-import { OutdatedDepsCard }      from './OutdatedDepsCard.js'
-import { GitMetricsCard }        from './GitMetricsCard.js'
-import { StackCard }             from './StackCard.js'
-import { AIRecommendationsCard } from './ai/AIRecommendationsCard.js'
-import { AISummaryBanner }       from './ai/AISummaryBanner.js'
-import { RepoHistoryCard }       from './history/RepoHistoryCard.js'
+import { HealthScoreCard }           from './HealthScoreCard.js'
+import { VulnerabilityCard }         from './VulnerabilityCard.js'
+import { OutdatedDepsCard }          from './OutdatedDepsCard.js'
+import { GitMetricsCard }            from './GitMetricsCard.js'
+import { StackCard }                 from './StackCard.js'
+import { AIRecommendationsCard }     from './ai/AIRecommendationsCard.js'
+import { AISummaryBanner }           from './ai/AISummaryBanner.js'
+import { RepoHistoryCard }           from './history/RepoHistoryCard.js'
+import { ShareButton }               from './ShareButton.js'
+import { ArchitectureIntelCard }     from './architecture/ArchitectureIntelCard.js'
 
 export function ResultCard({ result, repoUrl, scanId, onRescan }) {
   if (!result) return null
@@ -23,18 +24,18 @@ export function ResultCard({ result, repoUrl, scanId, onRescan }) {
     )
   }
 
-  const { repo, summary, stack, architecture, dependencies,
-          vulnerabilities, outdated, docker, gitMetrics,
-          healthScore, aiRecommendations, stats } = result
-  // Guard against incomplete results
-if (!stats || !repo || !summary) {
-  return (
-    <div className="w-full max-w-3xl border border-zinc-800 rounded-lg p-8 text-center">
-      <p className="font-mono text-zinc-400 mb-2">⚠ Analysis returned incomplete data</p>
-      <p className="font-mono text-xs text-zinc-600">Please try rescanning the repository.</p>
-    </div>
-  )
-}        
+  const { repo, summary, stack, architecture, architectureIntel,
+          dependencies, vulnerabilities, outdated, docker,
+          gitMetrics, healthScore, aiRecommendations, stats } = result
+
+  if (!stats || !repo || !summary) {
+    return (
+      <div className="w-full max-w-3xl border border-zinc-800 rounded-lg p-8 text-center">
+        <p className="font-mono text-zinc-400 mb-2">⚠ Analysis returned incomplete data</p>
+        <p className="font-mono text-xs text-zinc-600">Please try rescanning the repository.</p>
+      </div>
+    )
+  }
 
   return (
     <div className="w-full max-w-3xl space-y-4">
@@ -45,49 +46,78 @@ if (!stats || !repo || !summary) {
           <div>
             <div className="flex items-center gap-2 mb-1">
               <div className="w-2 h-2 rounded-full bg-green-400" />
-              <span className="font-mono text-xs text-green-400 tracking-wider uppercase">Analysis complete</span>
+              <span className="font-mono text-xs text-green-400 tracking-wider uppercase">
+                Analysis complete
+              </span>
               {summary.hasAI && (
                 <span className="font-mono text-xs text-purple-400 tracking-wider">· AI enhanced</span>
+              )}
+              {architectureIntel?.supported && (
+                <span className="font-mono text-xs text-blue-400 tracking-wider">· Architecture analyzed</span>
               )}
             </div>
             <h2 className="font-mono text-xl font-bold text-white">{repo.owner}/{repo.name}</h2>
             <p className="font-mono text-xs text-zinc-500 mt-1">
-              {(stats?.totalFiles ?? 0).toLocaleString()} files · {(stats?.totalSizeKB ?? 0).toLocaleString()} KB
-              {stats.truncated && ' · (truncated at 5000 files)'}
+              {(stats?.totalFiles ?? 0).toLocaleString()} files ·{' '}
+              {(stats?.totalSizeKB ?? 0).toLocaleString()} KB
+              {stats?.truncated && ' · (truncated at 5000 files)'}
             </p>
           </div>
-          <button onClick={onRescan}
-            className="px-3 py-1.5 border border-zinc-700 text-zinc-400 font-mono text-xs rounded
-                       hover:border-zinc-500 hover:text-zinc-200 transition-colors whitespace-nowrap">
-            ↺ Rescan
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <ShareButton scanId={scanId} />
+            <button onClick={onRescan}
+              className="px-3 py-1.5 border border-zinc-700 text-zinc-400 font-mono text-xs
+                         rounded hover:border-zinc-500 hover:text-zinc-200 transition-colors whitespace-nowrap">
+              ↺ Rescan
+            </button>
+          </div>
         </div>
-        <div className="grid grid-cols-4 gap-3 mt-4">
+
+        {/* Quick stats — now includes architecture score */}
+        <div className="grid grid-cols-5 gap-3 mt-4">
           <QuickStat value={summary.score} label="Health score"
             color={summary.score >= 75 ? 'text-green-400' : summary.score >= 50 ? 'text-yellow-400' : 'text-red-400'} />
           <QuickStat value={summary.totalVulns} label="CVEs"
             color={summary.totalVulns > 0 ? 'text-red-400' : 'text-green-400'} />
-          <QuickStat value={summary.outdatedDeps} label="Outdated deps"
+          <QuickStat value={summary.outdatedDeps} label="Outdated"
             color={summary.outdatedDeps > 0 ? 'text-yellow-400' : 'text-green-400'} />
-          <QuickStat value={summary.hotspotCount || '—'} label="Hotspots" color="text-zinc-300" />
+          <QuickStat value={summary.hotspotCount || '—'} label="Git hotspots" color="text-zinc-300" />
+          <QuickStat
+            value={summary.architectureScore != null ? summary.architectureScore : '—'}
+            label="Arch score"
+            color={
+              summary.architectureScore == null ? 'text-zinc-500' :
+              summary.architectureScore >= 75 ? 'text-blue-400' :
+              summary.architectureScore >= 50 ? 'text-yellow-400' : 'text-red-400'
+            }
+          />
         </div>
       </div>
 
       {/* AI summary banner */}
       <AISummaryBanner aiRecommendations={aiRecommendations} />
 
-      {/* Phase 2 panels */}
+      {/* Core analysis panels */}
       <HealthScoreCard healthScore={healthScore} summary={summary} />
       <StackCard stack={stack} architecture={architecture} dependencies={dependencies} />
+
+      {/* Architecture Intelligence — shown after stack, before security */}
+      <ArchitectureIntelCard architectureIntel={architectureIntel} />
+
+      {/* Security + deps */}
       <VulnerabilityCard vulnerabilities={vulnerabilities} />
       <OutdatedDepsCard outdated={outdated} dependencySummary={dependencies?.summary} />
+
+      {/* Git intelligence */}
       <GitMetricsCard gitMetrics={gitMetrics} />
+
+      {/* Docker */}
       {docker?.found && <DockerCard docker={docker} />}
 
-      {/* Phase 3: AI recommendations */}
+      {/* AI recommendations */}
       <AIRecommendationsCard aiRecommendations={aiRecommendations} scanId={scanId} />
 
-      {/* Phase 4: history + trend chart */}
+      {/* History + trend */}
       <RepoHistoryCard repoUrl={repoUrl} currentScanId={scanId} />
 
       <p className="font-mono text-xs text-zinc-700 text-right pb-4">
@@ -109,10 +139,14 @@ function QuickStat({ value, label, color }) {
 function DockerCard({ docker }) {
   return (
     <div className="border border-zinc-800 rounded-lg p-5 bg-zinc-900/40">
-      <p className="font-mono text-xs text-zinc-500 uppercase tracking-wider mb-4">Docker Configuration</p>
+      <p className="font-mono text-xs text-zinc-500 uppercase tracking-wider mb-4">
+        Docker Configuration
+      </p>
       <div className="grid grid-cols-3 gap-3 mb-4">
         <div className="text-center p-2 border border-zinc-800 rounded">
-          <div className="font-mono text-sm font-bold text-white">{docker.isMultiStage ? 'Multi-stage' : 'Single-stage'}</div>
+          <div className="font-mono text-sm font-bold text-white">
+            {docker.isMultiStage ? 'Multi-stage' : 'Single-stage'}
+          </div>
           <div className="font-mono text-xs text-zinc-600">Build type</div>
         </div>
         <div className="text-center p-2 border border-zinc-800 rounded">

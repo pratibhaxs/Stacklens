@@ -49,3 +49,15 @@ export async function getScannedRepos() {
 export async function compareScans(scanId1, scanId2) {
   return request(`/api/history/compare/${scanId1}/${scanId2}`)
 }
+
+// ─── Public Reports ───────────────────────────────────────────────────────────
+
+// Fetch a public report by scan ID (no auth needed)
+export async function getPublicReport(scanId) {
+  return request(`/api/reports/${scanId}`)
+}
+
+// Fetch lightweight summary for preview
+export async function getReportSummary(scanId) {
+  return request(`/api/reports/${scanId}/summary`)
+}

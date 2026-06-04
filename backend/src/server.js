@@ -4,6 +4,8 @@ import express from 'express'
 import cors from 'cors'
 import scansRouter   from './routes/scans.js'
 import historyRouter from './routes/history.js'
+import reportsRouter from './routes/reports.js'
+import webhookRouter from './routes/webhook.js'
 
 const app  = express()
 const PORT = process.env.PORT || 3001
@@ -12,6 +14,11 @@ app.use(cors({
   origin:      process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true,
 }))
+
+// Raw body needed for GitHub webhook signature verification
+// Must come BEFORE express.json() for the webhook route
+app.use('/api/webhook', express.raw({ type: 'application/json' }))
+
 app.use(express.json({ limit: '10mb' }))
 
 app.use((req, _res, next) => {
@@ -21,6 +28,8 @@ app.use((req, _res, next) => {
 
 app.use('/api/scans',   scansRouter)
 app.use('/api/history', historyRouter)
+app.use('/api/reports', reportsRouter)
+app.use('/api/webhook', webhookRouter)
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), uptime: Math.round(process.uptime()) })
@@ -32,7 +41,7 @@ app.use((_req, res) => res.status(404).json({ error: 'Not found' }))
 app.use((error, _req, res, _next) => {
   console.error('[server] Unhandled error:', error)
   res.status(500).json({
-    error:   'Internal server error',
+    error: 'Internal server error',
     ...(process.env.NODE_ENV === 'development' ? { details: error.message } : {}),
   })
 })
