@@ -1,11 +1,16 @@
+# backend/render.yaml
+# Single Web Service for Render free tier.
+# Runs server + worker together in one process.
 
 services:
-  # API server
   - type: web
-    name: stacklens-backend
+    name: reposcan-backend
     env: docker
     dockerfilePath: ./Dockerfile
+    # Override CMD to use combined server+worker entry point
+    dockerCommand: node src/server-with-worker.js
     plan: free
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
@@ -24,17 +29,4 @@ services:
       - key: FRONTEND_URL
         sync: false
       - key: WEBHOOK_SECRET
-        sync: false
-
-  # Background worker — same image, different start command
-  - type: worker
-    name: stacklens-worker
-    env: docker
-    dockerfilePath: ./Dockerfile
-    dockerCommand: node src/worker/index.js
-    plan: free
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: DATABASE_URL
         sync: false
