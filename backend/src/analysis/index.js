@@ -1,156 +1,166 @@
-// src/analysis/architecture/index.js
-// Main entry point for architecture intelligence analysis.
-// Orchestrates: AST parsing → dependency graph → anti-pattern detection → scoring.
-//
-// Only runs on JS/TS files — the languages where AST parsing is supported.
-// For Java/Python/Go, we fall back to file-level metrics (LOC, import count).
-// This is intentional — deep AST analysis of every language would take too long.
-
+// src/analysis/index.js — with Architecture Intelligence
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
 import path from 'path'
-import { PARSEABLE_EXTENSIONS, parseFile } from './ast-parser.js'
-import { buildDependencyGraph, detectCycles, calculateCoupling } from './dependency-graph.js'
-import {
-  detectGodModules,
-  formatCircularDeps,
-  formatHighCoupling,
-  detectAnemicModels,
-  detectFeatureEnvy,
-  detectLayerViolations,
-} from './anti-patterns.js'
-import { calculateArchitectureScore, calculateArchitecturalHotspots } from './scorer.js'
+import simpleGit from 'simple-git'
 
-const MAX_FILES_TO_PARSE = 150  // cap for performance — parsing AST is CPU-intensive
+import { getAllFiles }              from './get-files.js'
+import { detectStack }             from './detectors/stack.js'
+import { detectArchitecture }      from './detectors/architecture.js'
+import { parseNpmDependencies }    from './parsers/npm.js'
+import { parsePythonDependencies } from './parsers/python.js'
+import { parseJavaDependencies, parseGradleDependencies } from './parsers/java.js'
+import { parseGoDependencies }     from './parsers/golang.js'
+import { checkVulnerabilities }    from './parsers/cve.js'
+import { checkOutdatedDependencies } from './parsers/outdated.js'
+import { parseDockerfile, parseDockerCompose } from './parsers/docker.js'
+import { analyzeGitHistory }       from './git-metrics.js'
+import { calculateHealthScore }    from './scoring.js'
+import { generateAIRecommendations } from './ai/client.js'
+import { analyzeArchitecture }     from './architecture/index.js'
 
-export async function analyzeArchitecture(files, rootDir, gitMetrics) {
-  // Filter to parseable JS/TS source files only
-  const parseableFiles = files.sourceFiles
-    .filter(f => PARSEABLE_EXTENSIONS.has(f.ext))
-    .slice(0, MAX_FILES_TO_PARSE)
+export async function runAnalysis(repoUrl, owner, repoName) {
+  const tmpDir = mkdtempSync(path.join(tmpdir(), 'reposcan-'))
 
-  if (parseableFiles.length < 3) {
-    return {
-      supported:   false,
-      reason:      'Insufficient JavaScript/TypeScript files for architecture analysis',
-      fileCount:   parseableFiles.length,
+  try {
+    // 1. Clone
+    console.log(`[analysis] Cloning ${repoUrl}`)
+    const git = simpleGit()
+    await git.clone(repoUrl, tmpDir, ['--depth', '200', '--single-branch', '--no-tags'])
+
+    // 2. File traversal
+    console.log('[analysis] Walking file tree')
+    const files = getAllFiles(tmpDir, { maxFiles: 5000 })
+
+    if (files.sourceFiles.length < 3) {
+      return {
+        phase: 4, scannedAt: new Date().toISOString(),
+        repo: { owner, name: repoName, url: repoUrl },
+        insufficient: true,
+        message: `Insufficient source code (found ${files.sourceFiles.length} source files)`,
+        stats: files.stats,
+      }
     }
-  }
 
-  console.log(`[architecture] Parsing ${parseableFiles.length} JS/TS files...`)
+    // 3. Stack + architecture classifier
+    console.log('[analysis] Detecting stack and architecture')
+    const stack        = detectStack(tmpDir, files.configFiles)
+    const architecture = detectArchitecture(tmpDir, stack)
 
-  // ── Phase A: Parse all files ──────────────────────────────────────────────
-  const fileMetrics = parseableFiles
-    .map(f => parseFile(f.path))
-    .filter(Boolean)  // remove files that failed to parse
+    // 4. Dependency parsing
+    console.log(`[analysis] Parsing dependencies (${stack.primary?.name || 'unknown'})`)
+    let parsedDeps = { ok: false, dependencies: [] }
+    switch (stack.primary?.name) {
+      case 'nodejs':  parsedDeps = parseNpmDependencies(tmpDir); break
+      case 'python':  parsedDeps = parsePythonDependencies(tmpDir); break
+      case 'java':
+        parsedDeps = parseJavaDependencies(tmpDir)
+        if (!parsedDeps.ok || parsedDeps.dependencies.length === 0)
+          parsedDeps = parseGradleDependencies(tmpDir)
+        break
+      case 'go':      parsedDeps = parseGoDependencies(tmpDir); break
+      default:        parsedDeps = parseNpmDependencies(tmpDir); break
+    }
+    const allDependencies = parsedDeps.dependencies || []
 
-  console.log(`[architecture] Successfully parsed ${fileMetrics.length} files`)
+    // 5-8. Concurrent analysis — all independent, run simultaneously
+    console.log('[analysis] Running concurrent analysis (CVE, outdated, Docker, git, architecture)')
+    const [vulnsR, outdatedR, dockerR, composeR, gitR, archR] = await Promise.allSettled([
+      checkVulnerabilities(allDependencies),
+      checkOutdatedDependencies(allDependencies),
+      Promise.resolve(parseDockerfile(tmpDir, files.configFiles)),
+      Promise.resolve(parseDockerCompose(tmpDir)),
+      analyzeGitHistory(tmpDir),
+      analyzeArchitecture(files, tmpDir, null),  // git metrics passed after git analysis
+    ])
 
-  // ── Phase B: Build dependency graph ───────────────────────────────────────
-  const { graph, reverseGraph } = buildDependencyGraph(fileMetrics, rootDir)
+    const x = (r) => r.status === 'fulfilled' ? r.value : null
+    const vulnerabilities  = x(vulnsR)   || { vulnerabilities: [], checkedCount: 0 }
+    const outdated         = x(outdatedR) || { outdated: [], checkedCount: 0 }
+    const docker           = x(dockerR)  || { found: false }
+    const dockerCompose    = x(composeR) || { found: false }
+    const gitMetrics       = x(gitR)     || null
 
-  // ── Phase C: Detect all anti-patterns ─────────────────────────────────────
-  const rawCycles      = detectCycles(graph)
-  const couplingData   = calculateCoupling(graph, reverseGraph)
+    // Architecture analysis needs git metrics for hotspot correlation
+    // Re-run if git succeeded — this is fast since AST was already parsed
+    let architectureIntel = x(archR)
+    if (gitMetrics && architectureIntel?.supported) {
+      try {
+        architectureIntel = await analyzeArchitecture(files, tmpDir, gitMetrics)
+      } catch { /* use first result */ }
+    }
 
-  const godModules        = detectGodModules(fileMetrics)
-  const circularDeps      = formatCircularDeps(rawCycles)
-  const highCoupling      = formatHighCoupling(couplingData)
-  const anemicModels      = detectAnemicModels(fileMetrics)
-  const featureEnvy       = detectFeatureEnvy(fileMetrics, graph)
-  const layerViolations   = detectLayerViolations(fileMetrics, graph)
+    // 9. Health score — now includes architecture score
+    console.log('[analysis] Calculating health score')
+    const healthScore = calculateHealthScore({
+      vulnerabilities, outdated, docker, gitMetrics, stack, architectureIntel
+    })
 
-  // ── Phase D: Calculate scores ─────────────────────────────────────────────
-  const architectureData = { godModules, circularDeps, highCoupling, anemicModels, featureEnvy, layerViolations }
-  const architectureScore = calculateArchitectureScore(architectureData)
+    // 10. AI recommendations — receives architecture findings too
+    console.log('[analysis] Generating AI recommendations')
+    const aiRecommendations = await generateAIRecommendations({
+      healthScore, stack, architecture, vulnerabilities, outdated, docker,
+      gitMetrics, architectureIntel
+    })
 
-  // ── Phase E: Architectural hotspots (combines all signals) ────────────────
-  const architecturalHotspots = calculateArchitecturalHotspots(
-    fileMetrics,
-    couplingData,
-    gitMetrics?.hotspots
-  )
+    return {
+      phase:     4,
+      scannedAt: new Date().toISOString(),
+      repo:      { owner, name: repoName, url: repoUrl, size: files.stats.totalSizeKB },
+      stats:         files.stats,
+      stack,
+      architecture,
+      architectureIntel,   // full architecture intelligence data
+      dependencies: {
+        ...parsedDeps,
+        dependencies: undefined,
+        summary: {
+          total:     allDependencies.length,
+          prod:      allDependencies.filter(d => !d.isDev).length,
+          dev:       allDependencies.filter(d => d.isDev).length,
+          ecosystem: stack.primary?.name || 'unknown',
+        },
+      },
+      vulnerabilities,
+      outdated,
+      docker,
+      dockerCompose,
+      gitMetrics,
+      healthScore,
+      aiRecommendations,
+      summary: buildSummary(vulnerabilities, outdated, docker, healthScore, gitMetrics, aiRecommendations, architectureIntel),
+    }
 
-  // ── Phase F: Summary stats ────────────────────────────────────────────────
-  const summary = {
-    filesAnalyzed:      fileMetrics.length,
-    totalCycles:        rawCycles.length,
-    criticalCycles:     circularDeps.filter(c => c.severity === 'high').length,
-    godModulesCount:    godModules.length,
-    highCouplingCount:  highCoupling.length,
-    anemicModelsCount:  anemicModels.length,
-    featureEnvyCount:   featureEnvy.length,
-    layerViolations:    layerViolations.length,
-    hotspotCount:       architecturalHotspots.length,
-    architectureScore:  architectureScore.score,
-    architectureGrade:  architectureScore.grade,
-  }
-
-  // Top issues for quick display
-  const topIssues = buildTopIssues(godModules, circularDeps, highCoupling, layerViolations)
-
-  return {
-    supported:           true,
-    filesParsed:         fileMetrics.length,
-    architectureScore,
-    summary,
-    topIssues,
-    godModules:          godModules.slice(0, 5),
-    circularDeps:        circularDeps.slice(0, 5),
-    highCoupling:        highCoupling.slice(0, 8),
-    anemicModels:        anemicModels.slice(0, 5),
-    featureEnvy:         featureEnvy.slice(0, 5),
-    layerViolations,
-    architecturalHotspots,
-    // Full coupling data for dependency graph visualization
-    couplingData:        couplingData.slice(0, 20),
+  } finally {
+    try { rmSync(tmpDir, { recursive: true, force: true }) }
+    catch (e) { console.error('[analysis] Cleanup failed:', e.message) }
   }
 }
 
-// Builds a prioritized list of top issues across all categories
-function buildTopIssues(godModules, circularDeps, highCoupling, layerViolations) {
-  const issues = []
-
-  circularDeps
-    .filter(c => c.severity === 'high')
-    .slice(0, 3)
-    .forEach(c => issues.push({
-      severity: 'critical',
-      category: 'circular-dependency',
-      title:    'Circular dependency detected',
-      detail:   c.display,
-      fix:      c.suggestion,
-    }))
-
-  layerViolations
-    .slice(0, 3)
-    .forEach(v => issues.push({
-      severity: 'high',
-      category: 'layer-violation',
-      title:    'Architecture layer violation',
-      detail:   `${v.from} → ${v.to}`,
-      fix:      v.suggestion,
-    }))
-
-  godModules
-    .filter(g => g.severity === 'critical')
-    .slice(0, 3)
-    .forEach(g => issues.push({
-      severity: 'high',
-      category: 'god-module',
-      title:    'God module detected',
-      detail:   `${g.file} (${g.linesOfCode} LOC, ${g.functionCount} functions)`,
-      fix:      g.suggestion,
-    }))
-
-  highCoupling
-    .filter(c => c.couplingRisk === 'critical')
-    .slice(0, 3)
-    .forEach(c => issues.push({
-      severity: 'medium',
-      category: 'high-coupling',
-      title:    'High coupling detected',
-      detail:   `${c.file} has ${c.efferentCoupling} outgoing dependencies`,
-      fix:      c.suggestion,
-    }))
-
-  return issues.slice(0, 8)
+function buildSummary(vulnerabilities, outdated, docker, healthScore, gitMetrics, aiRecommendations, architectureIntel) {
+  return {
+    score:               healthScore.score,
+    grade:               healthScore.grade,
+    scoreLabel:          healthScore.label,
+    scoreColor:          healthScore.color,
+    criticalCVEs:        vulnerabilities.summary?.CRITICAL || 0,
+    highCVEs:            vulnerabilities.summary?.HIGH || 0,
+    totalVulns:          vulnerabilities.summary?.total || 0,
+    outdatedDeps:        outdated.summary?.total || 0,
+    highRiskOutdated:    outdated.summary?.highRisk || 0,
+    hasDocker:           docker.found || false,
+    dockerIssues:        docker.issueCount || 0,
+    hotspotCount:        gitMetrics?.hotspots?.hotspots?.length || 0,
+    busFactorScore:      gitMetrics?.busFactor?.busFactorScore || null,
+    commitTrend:         gitMetrics?.commitFrequency?.trend || null,
+    topHotspot:          gitMetrics?.hotspots?.mostChanged?.file || null,
+    hasAI:               aiRecommendations !== null,
+    aiRisk:              aiRecommendations?.overallRisk || null,
+    // Architecture
+    architectureScore:   architectureIntel?.architectureScore?.score || null,
+    architectureGrade:   architectureIntel?.architectureScore?.grade || null,
+    circularDepsCount:   architectureIntel?.summary?.totalCycles || 0,
+    godModulesCount:     architectureIntel?.summary?.godModulesCount || 0,
+    archTopIssues:       architectureIntel?.topIssues?.length || 0,
+  }
 }
